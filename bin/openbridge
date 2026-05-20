@@ -1,0 +1,269 @@
+#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const gatewayScript = join(packageRoot, "src", "gateway.mjs");
+const stateRoot = process.env.OPENBRIDGE_STATE_DIR || join(homedir(), ".config", "openbridge-llm");
+const pidFile = join(stateRoot, "gateway.pid");
+const tokenFile = join(stateRoot, "gateway.token");
+const logFile = join(stateRoot, "gateway.log");
+const host = process.env.OPENBRIDGE_HOST || "127.0.0.1";
+const port = Number(process.env.OPENBRIDGE_PORT || 43117);
+const baseUrl = `http://${host}:${port}`;
+
+const [command, ...args] = process.argv.slice(2);
+
+await main(command || "help", args);
+
+async function main(cmd, values) {
+  switch (cmd) {
+    case "help":
+    case "-h":
+    case "--help":
+      usage();
+      break;
+    case "up":
+      await up();
+      break;
+    case "down":
+    case "stop":
+      down();
+      break;
+    case "status":
+      status();
+      break;
+    case "health":
+      await printFetch("/health");
+      break;
+    case "models":
+      await printFetch("/v1/models", true);
+      break;
+    case "env":
+      printEnv();
+      break;
+    case "logs":
+      logs();
+      break;
+    case "cleanup":
+    case "cleanup-sessions":
+      await cleanup();
+      break;
+    case "with":
+      await withCommand(values);
+      break;
+    case "install-skill":
+      installSkill(values);
+      break;
+    default:
+      console.error(`Unknown command: ${cmd}`);
+      usage();
+      process.exit(2);
+  }
+}
+
+function usage() {
+  console.log(`OpenBridgeLLM
+
+Usage:
+  openbridge up
+  openbridge down
+  openbridge status
+  openbridge health
+  openbridge models
+  openbridge env
+  openbridge logs
+  openbridge cleanup
+  openbridge with <command...>
+  openbridge install-skill --scope project|global
+
+Environment:
+  OPENBRIDGE_HOST             default 127.0.0.1
+  OPENBRIDGE_PORT             default 43117
+  OPENBRIDGE_STATE_DIR        default ~/.config/openbridge-llm
+  OPENBRIDGE_MODEL            explicit OpenCode model provider/model
+  OPENBRIDGE_MODEL_MODE       mask|strict|debug, default mask
+`);
+}
+
+async function up() {
+  ensureStateDir();
+  if (isRunning()) {
+    console.log(`OpenBridgeLLM already running at ${baseUrl} (pid ${readPid()})`);
+    return;
+  }
+
+  const token = ensureToken();
+  writeFileSync(logFile, "", { mode: 0o600 });
+  const logFd = openSync(logFile, "a", 0o600);
+  const child = spawn(process.execPath, [gatewayScript, "--host", host, "--port", String(port)], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      OPENBRIDGE_TOKEN: token,
+      OPENBRIDGE_REPO_ROOT: process.cwd(),
+    },
+  });
+  closeSync(logFd);
+  child.unref();
+  writeFileSync(pidFile, `${child.pid}\n`, { mode: 0o600 });
+
+  await sleep(1000);
+  if (!isRunning()) {
+    console.error(`OpenBridgeLLM failed to start. Log: ${logFile}`);
+    logs();
+    process.exit(1);
+  }
+  console.log(`OpenBridgeLLM started at ${baseUrl} (pid ${child.pid})`);
+}
+
+function down() {
+  if (!isRunning()) {
+    console.log("OpenBridgeLLM is not running.");
+    return;
+  }
+  const pid = readPid();
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {}
+  try {
+    unlinkSync(pidFile);
+  } catch {}
+  console.log("OpenBridgeLLM stopped.");
+}
+
+function status() {
+  if (isRunning()) {
+    console.log(`running pid=${readPid()} url=${baseUrl}`);
+  } else {
+    console.log(`stopped url=${baseUrl}`);
+  }
+}
+
+async function printFetch(path, auth = false) {
+  const response = await fetch(`${baseUrl}${path}`, { headers: auth ? authHeaders() : {} });
+  const body = await response.text();
+  if (!response.ok) {
+    console.error(body);
+    process.exit(1);
+  }
+  console.log(body);
+}
+
+function printEnv() {
+  const token = ensureToken();
+  console.log(`export OPENAI_BASE_URL=${baseUrl}/v1`);
+  console.log(`export OPENAI_API_KEY=${token}`);
+  console.log(`export ANTHROPIC_BASE_URL=${baseUrl}`);
+  console.log(`export ANTHROPIC_API_KEY=${token}`);
+  console.log(`export OLLAMA_HOST=${baseUrl}`);
+  console.log(`export OPENBRIDGE_BASE_URL=${baseUrl}`);
+  console.log(`export OPENBRIDGE_TOKEN=${token}`);
+}
+
+function logs() {
+  if (!existsSync(logFile)) {
+    console.log(`No log file at ${logFile}`);
+    return;
+  }
+  console.log(readFileSync(logFile, "utf8"));
+}
+
+async function cleanup() {
+  await ensureRunning();
+  const response = await fetch(`${baseUrl}/admin/cleanup-sessions`, { method: "POST", headers: authHeaders() });
+  const body = await response.text();
+  if (!response.ok) {
+    console.error(body);
+    process.exit(1);
+  }
+  console.log(body);
+}
+
+async function withCommand(values) {
+  if (!values.length) {
+    console.error("Usage: openbridge with <command...>");
+    process.exit(2);
+  }
+  await ensureRunning();
+  const token = ensureToken();
+  const child = spawn(values[0], values.slice(1), {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      OPENAI_BASE_URL: `${baseUrl}/v1`,
+      OPENAI_API_KEY: token,
+      ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_API_KEY: token,
+      OLLAMA_HOST: baseUrl,
+      OPENBRIDGE_BASE_URL: baseUrl,
+      OPENBRIDGE_TOKEN: token,
+    },
+  });
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    process.exit(code ?? 1);
+  });
+}
+
+function installSkill(values) {
+  const scopeIndex = values.indexOf("--scope");
+  const scope = scopeIndex >= 0 ? values[scopeIndex + 1] : "project";
+  const target = scope === "global"
+    ? join(homedir(), ".config", "opencode", "skills", "openbridge-llm", "SKILL.md")
+    : join(process.cwd(), ".opencode", "skills", "openbridge-llm", "SKILL.md");
+  if (scope !== "global" && scope !== "project") {
+    console.error("--scope must be project or global");
+    process.exit(2);
+  }
+  const source = join(packageRoot, "skills", "openbridge-llm", "SKILL.md");
+  mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
+  writeFileSync(target, readFileSync(source));
+  console.log(`Installed OpenBridgeLLM skill at ${target}`);
+}
+
+async function ensureRunning() {
+  if (!isRunning()) await up();
+}
+
+function ensureStateDir() {
+  mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+}
+
+function ensureToken() {
+  ensureStateDir();
+  if (!existsSync(tokenFile)) {
+    writeFileSync(tokenFile, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+  }
+  return readFileSync(tokenFile, "utf8").trim();
+}
+
+function authHeaders() {
+  return { Authorization: `Bearer ${ensureToken()}` };
+}
+
+function isRunning() {
+  const pid = readPid();
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readPid() {
+  if (!existsSync(pidFile)) return null;
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

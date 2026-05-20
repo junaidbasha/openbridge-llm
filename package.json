@@ -1,0 +1,49 @@
+{
+  "name": "openbridge-llm",
+  "version": "0.1.0",
+  "description": "OpenBridgeLLM: local compatibility bridge from OpenAI, Anthropic, and Ollama-shaped tools to the current OpenCode model.",
+  "type": "module",
+  "bin": {
+    "openbridge": "./bin/openbridge"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "skills",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check bin/openbridge && node --check src/gateway.mjs && node --check src/model-resolver.mjs && node --check src/security/redact.mjs && bash -n scripts/with-openbridge.sh",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node src/model-resolver.mjs --json"
+  },
+  "keywords": [
+    "opencode",
+    "llm",
+    "openai",
+    "anthropic",
+    "ollama",
+    "gateway",
+    "proxy"
+  ],
+  "author": "Junaid Basha",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junaidbasha/openbridge-llm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/junaidbasha/openbridge-llm/issues"
+  },
+  "homepage": "https://github.com/junaidbasha/openbridge-llm#readme",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "1.15.5",
+    "opencode-ai": "1.15.5"
+  }
+}
