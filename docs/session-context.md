@@ -55,6 +55,28 @@ Long-term improvement: add an OpenCode plugin that records the last actual provi
 
 ## Current BuildCode Note
 
-The previous Ruflo-specific experiment in `buildcode-live` is uncommitted and should not be expanded. OpenBridgeLLM now lives in its own sibling folder: `/Users/junaidbasha/Desktop/openbridge-llm`.
+The previous Ruflo-specific experiment in `buildcode-live` was discarded. OpenBridgeLLM now lives in its own sibling folder: `/Users/junaidbasha/Desktop/openbridge-llm`.
 
-If cleanup of `buildcode-live` is desired, ask explicitly before reverting or deleting those uncommitted files.
+## Session Handoff
+
+- Public repo: `https://github.com/junaidbasha/openbridge-llm`.
+- Local repo: `/Users/junaidbasha/Desktop/openbridge-llm`.
+- Initial scaffold commit: `32fdc53 feat: scaffold OpenBridgeLLM`.
+- BuildCode repo cleanup completed after the initial scaffold: `buildcode-live` was returned to a clean working tree by discarding the uncommitted Ruflo-specific gateway experiment.
+- Validated before initial push: `npm run check`, `npm test`, `git diff --check`, and `npm pack --dry-run`.
+- Smoke validated locally before initial push: OpenAI-compatible, Anthropic-compatible, and Ollama-compatible requests returned exact expected responses; `openbridge cleanup` reported zero stale `openbridge:` sessions.
+
+## Next Chat Start
+
+Continue from this repo and read this file first:
+
+```text
+cd /Users/junaidbasha/Desktop/openbridge-llm
+```
+
+Next likely goals:
+
+1. Harden OpenBridgeLLM for public users.
+2. Add CI and richer tests.
+3. Polish docs/examples.
+4. Add BuildCode integration as a dependency or pinned tool, not copied code.
